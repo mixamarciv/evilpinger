@@ -1,0 +1,10 @@
+vpn1_tehnik: ping 10.8.0.4 /t
+vpn2: ping 10.8.1.1 /t
+vpn2_stroykom: ping 10.8.1.12 /t
+google:ping google.com -t
+yandex: ping ya.ru /t
+8.8.8.8: ping 8.8.8.8 /t
+server1: ping 192.168.1.1 /t
+server2: ping 192.168.1.2 /t
+vlad: ping 192.168.1.105 /t
+vpn1: ping 10.8.0.1 /t
