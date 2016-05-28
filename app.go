@@ -27,13 +27,14 @@ import (
 	//"encoding/json"
 	"bufio"
 	//"bytes"
-	"time"
+	//"time"
 
 	"os"
 
 	"regexp"
 
 	"github.com/gosuri/uilive"
+	"github.com/jroimartin/gocui"
 )
 
 func init() {
@@ -42,39 +43,104 @@ func init() {
 
 func main() {
 	log.Println("start app " + mf.CurTimeStrShort())
-
-	/*****
-	writer := uilive.New()
-	// start listening for updates and render
-	writer.Start()
-
-	for i := 0; i <= 100; i++ {
-		fmt.Fprintf(writer, "Downloading.. (%d/%d) GB\ntest 1\ntest 2\ntest 3\n", i, 100)
-		time.Sleep(time.Millisecond * 1)
-	}
-
-	fmt.Fprintln(writer, "Finished: Downloaded 100GB")
-	writer.Stop()
-	****/
-
-	line := make(chan string)
-	go start_app(line)
-	time.Sleep(time.Millisecond * 1)
-	/********
-		writer := uilive.New()
-		writer.Start()
-		for {
-			msg := <-line
-			fmt.Fprintf(writer, msg+"\n")
-			time.Sleep(time.Millisecond * 1)
-		}
-		writer.Stop()
-	********/
-	var input string
-	fmt.Scanln(&input)
+	start_app2()
 }
 
-func start_app(ml chan string) {
+func start_app2() {
+	g := gocui.NewGui()
+	if err := g.Init(); err != nil {
+		log.Panicln(err)
+	}
+	defer g.Close()
+
+	g.SetLayout(layout)
+	if err := g.SetKeybinding("", gocui.KeyCtrlC, gocui.ModNone, quit); err != nil {
+		log.Panicln(err)
+	}
+
+	s, _ := readIniFile(os.Args[0] + ".ini")
+
+	h := new(Hosts_info)
+	h.Init(len(s))
+
+	line := make(chan string, len(s))
+	for i := 0; i < len(s); i++ {
+		//fmt.Printf("%+v\n", s[i])
+
+		t := strings.SplitN(s[i], ":", 2)
+		servername := strings.Trim(t[0], "\t\r\n ")
+		if servername != "" {
+			h.AddServerName(servername)
+
+			go start_exec(line, s[i])
+		}
+	}
+
+	go func() {
+		for msg := range line {
+			ok := h.Update(msg)
+			if ok == 0 {
+				log.Panicln("\n--> ERROR msg: \n%+v\n\n" + msg)
+			}
+			s := h.GetMsg()
+
+			g.Execute(func(g *gocui.Gui) error {
+				v, err := g.View("ctr")
+				if err != nil {
+					log.Panicln(err)
+					return err
+				}
+				v.Clear()
+				fmt.Fprintf(v, s)
+				return nil
+			})
+		}
+	}()
+
+	if err := g.MainLoop(); err != nil && err != gocui.ErrQuit {
+		log.Panicln(err)
+	}
+
+}
+
+func layout(g *gocui.Gui) error {
+	maxX, maxY := g.Size()
+	if v, err := g.SetView("ctr", -1, -1, maxX, maxY); err != nil {
+		if err != gocui.ErrUnknownView {
+			fmt.Printf("\n--> ERROR002 err: \n%+v\n\n", err)
+			panic(1)
+			return err
+		}
+		fmt.Fprintln(v, "0")
+	}
+	return nil
+}
+
+func keybindings(g *gocui.Gui) error {
+	if err := g.SetKeybinding("", gocui.KeyCtrlC, gocui.ModNone, quit); err != nil {
+		return err
+	}
+	return nil
+}
+
+func quit(g *gocui.Gui, v *gocui.View) error {
+	return gocui.ErrQuit
+}
+
+func update_console(g *gocui.Gui, s string) {
+	g.Execute(func(g *gocui.Gui) error {
+		v, err := g.View("ctr")
+		if err != nil {
+			return err
+		}
+		v.Clear()
+		fmt.Fprintf(v, s)
+		return nil
+	})
+}
+
+//==============================================================================
+func start_app() {
 	s, _ := readIniFile(os.Args[0] + ".ini")
 
 	line := make(chan string, len(s))
@@ -123,8 +189,12 @@ type Hosts_info struct {
 	host            map[string]*Host_info
 	servername_list []string
 
-	init_cnt       int
-	fmt_str        string
+	init_cnt int
+
+	fmt_str   string
+	msfmt_str string
+	fmt_space string
+
 	servername_len int
 	host_len       int
 	ip_len         int
@@ -148,11 +218,16 @@ func (h *Hosts_info) Init2() {
 
 	h.init_cnt++
 	for _, servername := range h.servername_list {
-		ih := h.host[servername]
+		ih, ok := h.host[servername]
 
-		if h.servername_len <= len(ih.servername) {
-			h.servername_len = len(ih.servername) + 1
+		if h.servername_len <= len(servername) {
+			h.servername_len = len(servername) + 1
 		}
+
+		if ok == false {
+			continue
+		}
+
 		if h.host_len <= len(ih.host) {
 			h.host_len = len(ih.host) + 1
 		}
@@ -163,15 +238,19 @@ func (h *Hosts_info) Init2() {
 			h.ttl_len = len(ih.ttl) + 1
 		}
 	}
+
+	ms_len := 5
 	h.fmt_str = "%" + strconv.Itoa(h.servername_len) + "s" +
 		"%" + strconv.Itoa(h.host_len) + "s" +
 		"%" + strconv.Itoa(h.ttl_len) + "s" +
 		"%" + strconv.Itoa(h.ip_len) + "s" +
-		"%4s" //ms
+		"%" + strconv.Itoa(ms_len+1) + "s" //ms
+	h.msfmt_str = " %5s %5s %5s %5s %5s %5s %5s %5s"
+	h.fmt_space = fmt.Sprintf("%"+strconv.Itoa(h.servername_len+h.host_len+h.ttl_len+h.ip_len+ms_len)+"s", "")
 }
 
-func (h *Hosts_info) AddServerName(s string) (ok int) {
-	//h.servername_list = append(h.servername_list, servername)
+func (h *Hosts_info) AddServerName(servername string) (ok int) {
+	h.servername_list = append(h.servername_list, servername)
 	return 1
 }
 
@@ -197,7 +276,7 @@ func (h *Hosts_info) Update(s string) (ok int) {
 		i.ms = i.ms[0:50]
 		//ms++
 	} else {
-		h.servername_list = append(h.servername_list, servername)
+		//h.servername_list = append(h.servername_list, servername)
 		h.init_cnt = 0
 
 		i := new(Host_info)
@@ -207,11 +286,12 @@ func (h *Hosts_info) Update(s string) (ok int) {
 		i.ttl = a[3]
 		i.ms = make([]string, 50)
 		i.ms[0] = ms
-		i.ms[1] = "-"
-		i.ms[2] = "-"
-		i.ms[3] = "-"
-		i.ms[4] = "-"
+		for j := 1; j < 20; j++ {
+			i.ms[j] = "-"
+		}
+
 		h.host[servername] = i
+		h.Init2()
 	}
 
 	return 1
@@ -220,46 +300,35 @@ func (h *Hosts_info) Update(s string) (ok int) {
 func (h *Hosts_info) GetMsg() string {
 	h.Init2()
 
-	lfmt := "%70s\n"
-	msfmt := "%4s %4s %4s %4s"
+	//lfmt := "%70s\n"
 
-	l := fmt.Sprintf(h.fmt_str, "name", "host", "ttl", "ip", "ms")
-	l += fmt.Sprintf(msfmt, "", "", "", "")
+	s := h.fmt_space + " *out - time out\n"
+	s += h.fmt_space + " *non - not found\n"
+	s += h.fmt_space + " *fail - general failure\n"
 
-	s := fmt.Sprintf(lfmt, l)
+	s += "\n"
+
+	s += fmt.Sprintf(h.fmt_str, "name", "host", "ttl", "ip", "ms") + "\n"
 
 	for _, servername := range h.servername_list {
-		ih := h.host[servername]
-
-		l = fmt.Sprintf(h.fmt_str, ih.servername, ih.host, ih.ttl, ih.ip, ih.ms[0])
-		l += fmt.Sprintf(msfmt, ih.ms[1], ih.ms[2], ih.ms[3], ih.ms[4])
-		s += fmt.Sprintf(lfmt, l)
+		ih, ok := h.host[servername]
+		//s += servername + "\n"
+		//continue
+		if ok == false {
+			l := fmt.Sprintf(h.fmt_str, servername, "-", "-", "-", "-")
+			l += fmt.Sprintf(h.msfmt_str, "-", "-", "-", "-", "-", "-", "-", "-")
+			s += l + "\n"
+		} else {
+			l := fmt.Sprintf(h.fmt_str, ih.servername, ih.host, ih.ttl, ih.ip, ih.ms[0])
+			l += fmt.Sprintf(h.msfmt_str, ih.ms[1], ih.ms[2], ih.ms[3], ih.ms[4], ih.ms[5], ih.ms[6], ih.ms[7], ih.ms[8])
+			s += l + "\n"
+		}
 	}
 
 	return s
 }
 
 //----------------------------------------------------------------
-
-func start_app0() {
-	log.Println(mf.CurTimeStrShort() + " start app")
-
-	out, err := exec.Command("date").Output()
-	if err != nil {
-		printerr("какаято абшибка", err)
-	}
-	fmt.Printf("The date is %s\n", out)
-
-	line := make(chan string)
-
-	go start_exec(line, "ping")
-	go start_exec(line, "ping")
-	go start_exec(line, "ping")
-
-	var input string
-	fmt.Scanln(&input)
-}
-
 func readIniFile(fileread string) ([]string, error) {
 	var ret []string
 	file, err := os.Open(fileread)
@@ -401,8 +470,16 @@ func parseStr_getHostIp(s string) (string, string, int) {
 func parseStr(s string) string {
 	s = mf.Tr(s, "cp866", "UTF-8")
 	s = mf.StrTrim(s)
-	s = mf.StrReplaceRegexp2(s, "Ответ от [0-9\\.]*: число байт=32 время([<=][0-9]+)мс TTL=([0-9]+)", "$2 $1")
-	s = strings.Replace(s, "=", "", -1)
+	if regexp_match("Ответ от [0-9\\.]+: число байт=[\\d]+ время", s) {
+		s = mf.StrReplaceRegexp2(s, "Ответ от [0-9\\.]+: число байт=[\\d]+ время([<=][0-9]+)мс TTL=([0-9]+)", "$2 $1")
+		s = strings.Replace(s, "=", "", -1)
+	} else if regexp_match("Превышен интервал ожидания для запроса.", s) {
+		s = "- out"
+	} else if regexp_match("Заданный узел недоступен", s) {
+		s = "- non"
+	} else if regexp_match("General failure.", s) {
+		s = "- fail"
+	}
 	return s
 }
 
