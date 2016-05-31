@@ -10,7 +10,7 @@ import (
 	//"crypto/md5"
 	//"regexp"
 	"strings"
-	//"time"
+	"time"
 
 	//"github.com/satori/go.uuid"
 
@@ -35,14 +35,30 @@ import (
 
 	"github.com/gosuri/uilive"
 	"github.com/jroimartin/gocui"
+	"github.com/qiniu/iconv"
 )
 
-func init() {
+var inifile string
 
+func tr(s string, from string, to string) string {
+	cd, err := iconv.Open(to, from)
+	if err != nil {
+		ret := "ERROR gofncstd3000.tr(): iconv.Open(" + to + "," + from + ") failed!"
+		return ret
+	}
+	defer cd.Close()
+
+	ret := cd.ConvString(s)
+	return ret
+}
+
+func init() {
+	inifile = os.Args[0] + ".ini"
 }
 
 func main() {
-	log.Println("start app " + mf.CurTimeStrShort())
+	//log.Println("start app " + mf.CurTimeStrShort())
+	WriteErrorLog("start app")
 	start_app2()
 }
 
@@ -58,7 +74,7 @@ func start_app2() {
 		log.Panicln(err)
 	}
 
-	s, _ := readIniFile(os.Args[0] + ".ini")
+	s, _ := readIniFile(inifile)
 
 	h := new(Hosts_info)
 	h.Init(len(s))
@@ -108,10 +124,10 @@ func layout(g *gocui.Gui) error {
 	if v, err := g.SetView("ctr", -1, -1, maxX, maxY); err != nil {
 		if err != gocui.ErrUnknownView {
 			fmt.Printf("\n--> ERROR002 err: \n%+v\n\n", err)
-			panic(1)
+			log.Panicln(err)
 			return err
 		}
-		fmt.Fprintln(v, "0")
+		fmt.Fprintln(v, "prepare..\nread file: "+inifile)
 	}
 	return nil
 }
@@ -305,6 +321,7 @@ func (h *Hosts_info) GetMsg() string {
 	s := h.fmt_space + " *out - time out\n"
 	s += h.fmt_space + " *non - not found\n"
 	s += h.fmt_space + " *fail - general failure\n"
+	s += h.fmt_space + " *err - app error parse data\n"
 
 	s += "\n"
 
@@ -388,7 +405,13 @@ func start_exec(line chan string, command string) {
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		printerr("ERROR901: ошибка1 запуска внешнего процесса", err)
+		printerr("ERROR901: ошибка1 pipeOut внешнего процесса", err)
+		return
+	}
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		printerr("ERROR901: ошибка1 pipeErr внешнего процесса", err)
 		return
 	}
 	if err := cmd.Start(); err != nil {
@@ -397,13 +420,42 @@ func start_exec(line chan string, command string) {
 	}
 
 	r := bufio.NewReader(stdout)
+	out := ""
 	go func() {
 		i := 0
-		out := ""
 		for {
 			str, err := r.ReadString('\n')
 			if err != nil {
 				str = "ERROR readStdout Error!"
+				//log.Panicln(str, err)
+				//line <- out + "err err"
+				return
+			}
+			i++
+			if out == "" {
+				host, ip, ok := parseStr_getHostIp(str)
+				if ok == 1 {
+					out = servername + " " + host + " " + ip + " "
+					continue
+				}
+				continue
+			}
+			str = out + parseStr(str)
+			//fmt.Println(str)
+			line <- str
+		}
+	}()
+
+	r2 := bufio.NewReader(stderr)
+	go func() {
+		i := 0
+		for {
+			str, err := r2.ReadString('\n')
+			if err != nil {
+				str = "ERROR readStdErr Error!"
+				//log.Panicln(str, err)
+				//line <- out + "err err"
+				return
 			}
 			i++
 			if out == "" {
@@ -421,15 +473,19 @@ func start_exec(line chan string, command string) {
 	}()
 
 	if err := cmd.Wait(); err != nil {
-		printerr("ERROR903: ошибка3 ожидания внешнего процесса", err)
+		//out := servername + " host ipnotfound and non"
+		//line <- out
+		time.Sleep(time.Second * 3)
+		go start_exec(line, command)
 		return
 	}
+
 }
 
 func regexp_match(re, s string) bool {
 	r, err := regexp.Compile(re)
 	if err != nil {
-		printerr("regexp_match error", err)
+		printerr("regexp_match Compile error", err)
 		panic(1)
 	}
 	return r.MatchString(s)
@@ -437,7 +493,7 @@ func regexp_match(re, s string) bool {
 func regexp_replace(text string, regx_from string, to string) string {
 	reg, err := regexp.Compile(regx_from)
 	if err != nil {
-		printerr("regexp_replace error", err)
+		printerr("regexp_replace Compile error", err)
 		panic(1)
 	}
 	text = reg.ReplaceAllString(text, to)
@@ -445,40 +501,64 @@ func regexp_replace(text string, regx_from string, to string) string {
 }
 
 func parseStr_getHostIp(s string) (string, string, int) {
-	s = mf.Tr(s, "cp866", "UTF-8")
+	s = tr(s, "cp866", "UTF-8")
 	s = mf.StrTrim(s)
 	if s == "" {
-		return "err01", "err01", 0
+		return "err", "err", 0
 	}
 
-	//Обмен пакетами с 192.168.1.1 по с 32 байтами данных:
-	//Обмен пакетами с ya.ru [213.180.204.3] с 32 байтами данных:
-	if regexp_match("\\[[\\.0-9]+\\]", s) {
-		//Обмен пакетами с ya.ru [213.180.204.3] с 32 байтами данных:
-		ip := regexp_replace(s, "^.*\\[([0-9\\.]+)\\].*$", "$1")
-		host := regexp_replace(s, "^.* ([a-zA-Z\\.\\-]+) \\["+ip+"\\].*$", "$1")
-		return host, ip, 1
-	} else {
+	if regexp_match("При проверке связи не удалось обнаружить узел", s) {
+		host := regexp_replace(s, "При проверке связи не удалось обнаружить узел", "")
+		host = regexp_replace(host, "Проверьте имя узла и.*$", "")
+		host = regexp_replace(host, "\\.$", "")
+		host = mf.StrTrim(host)
+		return host, "notfound", 1
+	}
+	if regexp_match("Проверьте имя узла и повторите попытку", s) {
+		return "non", "notfound", 0
+	}
+
+	if regexp_match("Обмен пакетами с ", s) {
 		//Обмен пакетами с 192.168.1.1 по с 32 байтами данных:
-		ip := regexp_replace(s, "^.* ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}) .*$", "$1")
-		return ip, ip, 1
+		//Обмен пакетами с ya.ru [213.180.204.3] с 32 байтами данных:
+		if regexp_match("\\[[\\.0-9]+\\]", s) {
+			//Обмен пакетами с ya.ru [213.180.204.3] с 32 байтами данных:
+			ip := regexp_replace(s, "^.*\\[([0-9\\.]+)\\].*$", "$1")
+			host := regexp_replace(s, "^.* ([a-zA-Z0-9\\.\\-]+) \\["+ip+"\\].*$", "$1")
+			return host, ip, 1
+		} else {
+			//Обмен пакетами с 192.168.1.1 по с 32 байтами данных:
+			ip := regexp_replace(s, "^.* ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}) .*$", "$1")
+			return ip, ip, 1
+		}
 	}
 
-	return "err02", "err02", 0
+	WriteErrorLog("parseip error: " + s)
+	return "err", "err", 1
 }
 
 func parseStr(s string) string {
-	s = mf.Tr(s, "cp866", "UTF-8")
+	s = tr(s, "cp866", "UTF-8")
 	s = mf.StrTrim(s)
+	if s == "" {
+		return "- -"
+	}
 	if regexp_match("Ответ от [0-9\\.]+: число байт=[\\d]+ время", s) {
-		s = mf.StrReplaceRegexp2(s, "Ответ от [0-9\\.]+: число байт=[\\d]+ время([<=][0-9]+)мс TTL=([0-9]+)", "$2 $1")
+		s = mf.StrRegexpReplace(s, "Ответ от [0-9\\.]+: число байт=[\\d]+ время([<=][0-9]+)мс TTL=([0-9]+)", "$2 $1")
 		s = strings.Replace(s, "=", "", -1)
 	} else if regexp_match("Превышен интервал ожидания для запроса.", s) {
 		s = "- out"
-	} else if regexp_match("Заданный узел недоступен", s) {
+	} else if regexp_match("Заданн.+ (узел|сеть) недоступ", s) || regexp_match("Проверьте имя узла и повторите попытку.", s) {
 		s = "- non"
 	} else if regexp_match("General failure.", s) {
 		s = "- fail"
+	} else if regexp_match("Статистика Ping для ", s) ||
+		regexp_match("Пакетов.*отправлено.*получено.*потер", s) || regexp_match("Приблизительное время приема-передачи", s) ||
+		regexp_match("Минимальное.*Максимальное.*Среднее", s) || regexp_match("\\(\\d+\\% потерь\\)", s) {
+		s = "- -"
+	} else {
+		WriteErrorLog("parse error: " + s)
+		s = "err err"
 	}
 	return s
 }
@@ -492,4 +572,8 @@ func printerr(title string, err error) bool {
 		log.Println(serr)
 	}
 	return false
+}
+
+func WriteErrorLog(s string) {
+	mf.FileAppendStr(os.Args[0]+".log", "\n"+mf.CurTimeStrShort()+": "+s)
 }
