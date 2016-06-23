@@ -1,0 +1,23 @@
+localhost:   ping localhost /t
+anyname:     ping localhost /t
+anyip:       ping 127.0.0.1 /t
+myhomerouter: ping 192.168.1.1 /t
+orotheripmyhomerouter: ping 192.168.0.1 /t
+
+google:      ping google.com /t
+google_DNS1: ping 8.8.8.8 /t
+google_DNS2: ping 8.8.4.4 /t
+
+yandex:      ping ya.ru /t
+yandex_DNS1: ping 77.88.8.8 /t
+yandex_DNS2: ping 77.88.8.88 /t
+yandex_DNS3: ping 77.88.8.7 /t
+
+github.com: ping github.com /t
+sql.ru: ping sql.ru /t
+virtualbox.org: ping virtualbox.org /t
+golang.org: ping golang.org /t
+
+
+
+vladPC: ping 192.168.1.105 /t

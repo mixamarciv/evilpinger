@@ -10,16 +10,13 @@ import (
 	//"crypto/md5"
 	//"regexp"
 	"strings"
-	"time"
+	//"time"
 
 	//"github.com/satori/go.uuid"
 
-	"os/exec"
 	//"github.com/parnurzeal/gorequest"
 
 	//"text/template"
-
-	mf "gofncstd3000"
 
 	//"github.com/palantir/stacktrace"
 	//"runtime/debug"
@@ -27,23 +24,37 @@ import (
 	//"encoding/json"
 	"bufio"
 	//"bytes"
-	//"time"
+	"time"
 
 	"os"
+	"os/exec"
 
 	"regexp"
 
-	"github.com/gosuri/uilive"
+	//"github.com/gosuri/uilive"
 	"github.com/jroimartin/gocui"
 	"github.com/qiniu/iconv"
+	//mf "github.com/mixamarciv/gofncstd3000"
 )
 
 var inifile string
+var iconv_cp866_utf8 iconv.Iconv
+
+func init() {
+	var err error
+	iconv_cp866_utf8, err = iconv.Open("UTF-8", "cp866")
+	if err != nil {
+		ret := "ERROR init(): iconv.Open(UTF-8, cp866) failed!"
+		panic(ret)
+	}
+
+	inifile = os.Args[0] + ".list"
+}
 
 func tr(s string, from string, to string) string {
 	cd, err := iconv.Open(to, from)
 	if err != nil {
-		ret := "ERROR gofncstd3000.tr(): iconv.Open(" + to + "," + from + ") failed!"
+		ret := "ERROR tr(): iconv.Open(" + to + "," + from + ") failed!"
 		return ret
 	}
 	defer cd.Close()
@@ -52,8 +63,30 @@ func tr(s string, from string, to string) string {
 	return ret
 }
 
-func init() {
-	inifile = os.Args[0] + ".ini"
+func tr_cp866_utf8(s string) string {
+	ret := iconv_cp866_utf8.ConvString(s)
+	return ret
+}
+
+func strTrim(s string) string {
+	return strings.Trim(s, " \t\n\r")
+}
+
+func fileAppendStr(filename string, data string) error {
+	f, err := os.OpenFile(filename, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
+	if err != nil {
+		log.Panicln("FileAppendStr OpenFile error", err)
+		//return err
+	}
+
+	defer f.Close()
+
+	if _, err = f.WriteString(data); err != nil {
+		log.Panicln("FileAppendStr WriteString error", err)
+		//return err
+	}
+	f.Sync()
+	return nil
 }
 
 func main() {
@@ -63,6 +96,27 @@ func main() {
 }
 
 func start_app2() {
+	s, err := readIniFile(inifile)
+	if err != nil {
+		log.Printf("ERROR read file: %s", inifile)
+		log.Printf("%+v", err)
+		return
+	}
+
+	h := new(Hosts_info)
+	h.Init(len(s))
+
+	if len(s) == 0 {
+		log.Printf("not found ip list in file: %s", inifile)
+		fmt.Printf(`write this: 
+google: ping google.com /t
+yandex: ping ya.ru /t
+google_DNS: ping 8.8.8.8 /t
+yandex_DNS: ping 77.88.8.7 /t
+		`)
+		return
+	}
+
 	g := gocui.NewGui()
 	if err := g.Init(); err != nil {
 		log.Panicln(err)
@@ -73,11 +127,6 @@ func start_app2() {
 	if err := g.SetKeybinding("", gocui.KeyCtrlC, gocui.ModNone, quit); err != nil {
 		log.Panicln(err)
 	}
-
-	s, _ := readIniFile(inifile)
-
-	h := new(Hosts_info)
-	h.Init(len(s))
 
 	line := make(chan string, len(s))
 	for i := 0; i < len(s); i++ {
@@ -153,36 +202,6 @@ func update_console(g *gocui.Gui, s string) {
 		fmt.Fprintf(v, s)
 		return nil
 	})
-}
-
-//==============================================================================
-func start_app() {
-	s, _ := readIniFile(os.Args[0] + ".ini")
-
-	line := make(chan string, len(s))
-	for i := 0; i < len(s); i++ {
-		fmt.Printf("%+v\n", s[i])
-		go start_exec(line, s[i])
-	}
-
-	h := new(Hosts_info)
-	h.Init(len(s))
-
-	writer := uilive.New()
-	writer.Start()
-
-	for msg := range line {
-		ok := h.Update(msg)
-		if ok == 0 {
-			fmt.Fprintf(writer, "\n--> ERROR msg: \n%+v\n\n", msg)
-		}
-		s := h.GetMsg()
-		fmt.Fprintf(writer, s)
-	}
-	writer.Stop()
-
-	var input string
-	fmt.Scanln(&input)
 }
 
 /********************
@@ -319,7 +338,7 @@ func (h *Hosts_info) GetMsg() string {
 	//lfmt := "%70s\n"
 
 	s := h.fmt_space + " *out - time out\n"
-	s += h.fmt_space + " *non - not found\n"
+	s += h.fmt_space + " *notf - not found\n"
 	s += h.fmt_space + " *fail - general failure\n"
 	s += h.fmt_space + " *err - app error parse data\n"
 
@@ -473,7 +492,7 @@ func start_exec(line chan string, command string) {
 	}()
 
 	if err := cmd.Wait(); err != nil {
-		//out := servername + " host ipnotfound and non"
+		//out := servername + " host ipnotfound and notf"
 		//line <- out
 		time.Sleep(time.Second * 3)
 		go start_exec(line, command)
@@ -501,29 +520,35 @@ func regexp_replace(text string, regx_from string, to string) string {
 }
 
 func parseStr_getHostIp(s string) (string, string, int) {
-	s = tr(s, "cp866", "UTF-8")
-	s = mf.StrTrim(s)
+	s = tr_cp866_utf8(s)
+	s = strTrim(s)
 	if s == "" {
 		return "err", "err", 0
 	}
 
-	if regexp_match("При проверке связи не удалось обнаружить узел", s) {
+	if i := strings.Index(s, "При проверке связи не удалось обнаружить узел"); i != -1 {
 		host := regexp_replace(s, "При проверке связи не удалось обнаружить узел", "")
 		host = regexp_replace(host, "Проверьте имя узла и.*$", "")
-		host = regexp_replace(host, "\\.$", "")
-		host = mf.StrTrim(host)
+		host = regexp_replace(host, `\.$`, "")
+		host = strTrim(host)
 		return host, "notfound", 1
 	}
-	if regexp_match("Проверьте имя узла и повторите попытку", s) {
-		return "non", "notfound", 0
+
+	if i := strings.Index(s, "Проверьте имя узла и повторите попытку"); i != -1 {
+		return "notf", "notfound", 0
 	}
 
-	if regexp_match("Обмен пакетами с ", s) {
+	if i := strings.Index(s, "Обмен пакетами с "); i != -1 {
 		//Обмен пакетами с 192.168.1.1 по с 32 байтами данных:
 		//Обмен пакетами с ya.ru [213.180.204.3] с 32 байтами данных:
-		if regexp_match("\\[[\\.0-9]+\\]", s) {
+		if i := strings.Index(s, "["); i != -1 {
 			//Обмен пакетами с ya.ru [213.180.204.3] с 32 байтами данных:
-			ip := regexp_replace(s, "^.*\\[([0-9\\.]+)\\].*$", "$1")
+			ip := s
+			ip = regexp_replace(ip, `^.*\[`, "")
+			ip = regexp_replace(ip, `\].*$`, "")
+			if ip == "[::1]" {
+				ip = "::1"
+			}
 			host := regexp_replace(s, "^.* ([a-zA-Z0-9\\.\\-]+) \\["+ip+"\\].*$", "$1")
 			return host, ip, 1
 		} else {
@@ -539,17 +564,25 @@ func parseStr_getHostIp(s string) (string, string, int) {
 
 func parseStr(s string) string {
 	s = tr(s, "cp866", "UTF-8")
-	s = mf.StrTrim(s)
+	s = strTrim(s)
 	if s == "" {
 		return "- -"
 	}
 	if regexp_match("Ответ от [0-9\\.]+: число байт=[\\d]+ время", s) {
-		s = mf.StrRegexpReplace(s, "Ответ от [0-9\\.]+: число байт=[\\d]+ время([<=][0-9]+)мс TTL=([0-9]+)", "$2 $1")
-		s = strings.Replace(s, "=", "", -1)
+		s = regexp_replace(s, "Ответ от [0-9\\.]+: число байт=[\\d]+ время([<=][0-9]+)мс TTL=([0-9]+)", "$2 $1")
+		if strings.Index(s, "<=") == -1 {
+			s = strings.Replace(s, "=", "", -1)
+		}
+		//s = strings.Replace(s, "=", "", -1)
+	} else if regexp_match("Ответ от ::1:", s) {
+		s = regexp_replace(s, "^.*время([<=][0-9]+)мс.*$", "- $1")
+		if strings.Index(s, "<=") == -1 {
+			s = strings.Replace(s, "=", "", -1)
+		}
 	} else if regexp_match("Превышен интервал ожидания для запроса.", s) {
 		s = "- out"
 	} else if regexp_match("Заданн.+ (узел|сеть) недоступ", s) || regexp_match("Проверьте имя узла и повторите попытку.", s) {
-		s = "- non"
+		s = "- notf"
 	} else if regexp_match("General failure.", s) {
 		s = "- fail"
 	} else if regexp_match("Статистика Ping для ", s) ||
@@ -567,7 +600,7 @@ func printerr(title string, err error) bool {
 	if err != nil {
 		serr := "\n\n== ERROR: ======================================\n"
 		serr += title + "\n"
-		serr += mf.ErrStr(err)
+		serr += fmt.Sprintf("%+v", err)
 		serr += "\n\n== /ERROR ======================================\n"
 		log.Println(serr)
 	}
@@ -575,5 +608,7 @@ func printerr(title string, err error) bool {
 }
 
 func WriteErrorLog(s string) {
-	mf.FileAppendStr(os.Args[0]+".log", "\n"+mf.CurTimeStrShort()+": "+s)
+	t := time.Now()
+	p := fmt.Sprintf("%s", t.Format(time.RFC3339)[0:19])
+	fileAppendStr(os.Args[0]+".log", "\n"+p+": "+s)
 }
