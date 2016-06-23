@@ -10,7 +10,7 @@ google_DNS2: ping 8.8.4.4 /t
 
 yandex:      ping ya.ru /t
 yandex_DNS1: ping 77.88.8.8 /t
-yandex_DNS2: ping 77.88.8.88 /t
+yandex DNS2: ping 77.88.8.88 /t
 yandex_DNS3: ping 77.88.8.7 /t
 
 github.com: ping github.com /t

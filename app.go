@@ -108,7 +108,7 @@ func start_app2() {
 
 	if len(s) == 0 {
 		log.Printf("not found ip list in file: %s", inifile)
-		fmt.Printf(`write this: 
+		fmt.Printf(`f.e. write this: 
 google: ping google.com /t
 yandex: ping ya.ru /t
 google_DNS: ping 8.8.8.8 /t
@@ -131,9 +131,14 @@ yandex_DNS: ping 77.88.8.7 /t
 	line := make(chan string, len(s))
 	for i := 0; i < len(s); i++ {
 		//fmt.Printf("%+v\n", s[i])
+		s[i] = strings.Trim(s[i], "\t\r\n ")
+		if s[i] == "" {
+			continue
+		}
 
 		t := strings.SplitN(s[i], ":", 2)
 		servername := strings.Trim(t[0], "\t\r\n ")
+
 		if servername != "" {
 			h.AddServerName(servername)
 
@@ -145,7 +150,7 @@ yandex_DNS: ping 77.88.8.7 /t
 		for msg := range line {
 			ok := h.Update(msg)
 			if ok == 0 {
-				log.Panicln("\n--> ERROR msg: \n%+v\n\n" + msg)
+				log.Panicf("\n--> ERROR msg: \n%+v\n\n", msg)
 			}
 			s := h.GetMsg()
 
@@ -290,23 +295,23 @@ func (h *Hosts_info) AddServerName(servername string) (ok int) {
 }
 
 func (h *Hosts_info) Update(s string) (ok int) {
-
-	a := strings.Split(s, " ")
-	if len(a) < 5 {
+	b := strings.SplitN(s, ":", 2)
+	a := strings.Split(b[1], " ")
+	if len(a) < 4 {
 		fmt.Printf("\n--> ERROR: len(a)<5 \n%+v\n\n", a)
 		return 0
 	}
 
-	servername := a[0]
+	servername := b[0]
 
-	ms := a[4]
+	ms := a[3]
 
 	//h.host[]
 	if i, ok := h.host[servername]; ok {
-		i.servername = servername
-		i.host = a[1]
-		i.ip = a[2]
-		i.ttl = a[3]
+		//i.servername = servername
+		i.host = a[0]
+		i.ip = a[1]
+		i.ttl = a[2]
 		i.ms = append([]string{ms}, i.ms...)
 		i.ms = i.ms[0:50]
 		//ms++
@@ -316,10 +321,10 @@ func (h *Hosts_info) Update(s string) (ok int) {
 
 		i := new(Host_info)
 		i.servername = servername
-		i.host = a[1]
-		i.ip = a[2]
-		i.ttl = a[3]
-		i.ms = make([]string, 50)
+		i.host = a[0]
+		i.ip = a[1]
+		i.ttl = a[2]
+		i.ms = make([]string, 51)
 		i.ms[0] = ms
 		for j := 1; j < 20; j++ {
 			i.ms[j] = "-"
@@ -336,6 +341,7 @@ func (h *Hosts_info) GetMsg() string {
 	h.Init2()
 
 	//lfmt := "%70s\n"
+	//fileAppendStr("temp", fmt.Sprintf("%#v == %+v | len:%v\n\n", h.servername_list, h.host, len(h.servername_list)))
 
 	s := h.fmt_space + " *out - time out\n"
 	s += h.fmt_space + " *notf - not found\n"
@@ -422,6 +428,8 @@ func start_exec(line chan string, command string) {
 
 	cmd = start_cmd(appname, appargs)
 
+	//fileAppendStr("temp", fmt.Sprintf("servername = %#v;  %#v == %#v | %#v len:%#v\n\n", servername, arr1, arr2, command, len(command)))
+
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		printerr("ERROR901: ошибка1 pipeOut внешнего процесса", err)
@@ -454,7 +462,7 @@ func start_exec(line chan string, command string) {
 			if out == "" {
 				host, ip, ok := parseStr_getHostIp(str)
 				if ok == 1 {
-					out = servername + " " + host + " " + ip + " "
+					out = servername + ":" + host + " " + ip + " "
 					continue
 				}
 				continue
@@ -480,7 +488,7 @@ func start_exec(line chan string, command string) {
 			if out == "" {
 				host, ip, ok := parseStr_getHostIp(str)
 				if ok == 1 {
-					out = servername + " " + host + " " + ip + " "
+					out = servername + ":" + host + " " + ip + " "
 					continue
 				}
 				continue
